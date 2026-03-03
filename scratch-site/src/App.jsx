@@ -15,8 +15,8 @@ const PRIZES = [
 
 const MAX_ATTEMPTS = 3;
 const STORAGE_KEY = "romantic-scratch-board-v1";
-const CONFETTI_MS = 3000;
-const FLIP_MS = 600; // card flip animation duration
+const CONFETTI_MS = 4500;
+const REVEAL_MS = 450; // card reveal animation duration
 
 // ── Email notification via Web3Forms (key is safe to be public) ───────────────
 const WEB3FORMS_KEY = "85d97cfe-dfec-4b5b-950b-78cdd4465b51";
@@ -89,79 +89,66 @@ function loadState() {
   }
 }
 
-// ── FlipCard ──────────────────────────────────────────────────────────────────
+// ── RevealCard ────────────────────────────────────────────────────────────────
 function FlipCard({ prize, disabled, onReveal, resetToken, isChosen }) {
-  const [flipped, setFlipped] = useState(false);
+  const [revealed, setRevealed] = useState(false);
 
-  // Reset when a new round starts
   useEffect(() => {
-    setFlipped(false);
+    setRevealed(false);
   }, [resetToken]);
 
   const handleTap = () => {
-    if (disabled || flipped) return;
-    setFlipped(true);
+    if (disabled || revealed) return;
+    setRevealed(true);
     onReveal();
   };
 
   return (
     <div
       onClick={handleTap}
-      style={{ perspective: "700px" }}
       className={[
-        "aspect-square select-none",
-        disabled && !isChosen ? "opacity-30 pointer-events-none" : "cursor-pointer",
-        !disabled && !flipped ? "active:scale-95" : "",
-        "transition-transform duration-100",
+        "aspect-square relative rounded-2xl overflow-hidden select-none shadow-md",
+        disabled && !isChosen ? "opacity-30 pointer-events-none" : "",
+        !disabled && !revealed ? "cursor-pointer active:scale-95 transition-transform duration-100" : "",
       ].join(" ")}
     >
-      {/* 3-D container */}
+      {/* ── Front face (gold coin) ── */}
       <div
-        style={{
-          position: "relative",
-          width: "100%",
-          height: "100%",
-          transformStyle: "preserve-3d",
-          transition: flipped ? `transform ${FLIP_MS}ms cubic-bezier(0.4,0.15,0.2,1)` : "none",
-          transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)",
-        }}
+        className={[
+          "absolute inset-0 flex items-center justify-center",
+          "bg-gradient-to-br from-yellow-300 via-amber-400 to-orange-500",
+          "transition-all ease-in-out",
+          revealed ? "opacity-0 scale-75 pointer-events-none" : "opacity-100 scale-100",
+        ].join(" ")}
+        style={{ transitionDuration: `${REVEAL_MS}ms` }}
       >
-        {/* ── Front face (gold) ── */}
-        <div
-          style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}
-          className="absolute inset-0 rounded-2xl overflow-hidden flex items-center justify-center
-                     bg-gradient-to-br from-yellow-300 via-amber-400 to-orange-500 shadow-md"
-        >
-          <div className="card-shimmer" />
-          <div className="relative z-10 flex flex-col items-center gap-1.5 px-2 text-center">
-            <span className="text-3xl drop-shadow">🪙</span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/90 drop-shadow-sm leading-tight">
-              Tap to reveal
-            </span>
-          </div>
+        <div className="card-shimmer" />
+        <div className="relative z-10 flex flex-col items-center gap-1.5 px-2 text-center">
+          <span className="text-3xl drop-shadow">🪙</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/90 drop-shadow-sm leading-tight">
+            Tap to reveal
+          </span>
         </div>
+      </div>
 
-        {/* ── Back face (prize) ── */}
-        <div
-          style={{
-            backfaceVisibility: "hidden",
-            WebkitBackfaceVisibility: "hidden",
-            transform: "rotateY(180deg)",
-          }}
-          className={[
-            "absolute inset-0 rounded-2xl overflow-hidden flex flex-col items-center justify-center p-2 text-center shadow-md border-2",
-            isChosen
-              ? "bg-gradient-to-br from-rose-50 via-white to-amber-50 border-rose-300"
-              : "bg-white border-slate-100",
-          ].join(" ")}
-        >
-          <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-rose-400 mb-1.5">
-            Prize ✨
-          </span>
-          <span className="text-[10.5px] font-bold leading-[1.35] text-slate-800">
-            {prize}
-          </span>
-        </div>
+      {/* ── Back face (prize) ── */}
+      <div
+        className={[
+          "absolute inset-0 flex flex-col items-center justify-center p-2 text-center border-2",
+          isChosen
+            ? "bg-gradient-to-br from-rose-50 via-white to-amber-50 border-rose-300"
+            : "bg-white border-slate-100",
+          "transition-all ease-in-out",
+          revealed ? "opacity-100 scale-100" : "opacity-0 scale-110 pointer-events-none",
+        ].join(" ")}
+        style={{ transitionDuration: `${REVEAL_MS}ms` }}
+      >
+        <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-rose-400 mb-1.5">
+          Prize ✨
+        </span>
+        <span className="text-[10.5px] font-bold leading-[1.35] text-slate-800">
+          {prize}
+        </span>
       </div>
     </div>
   );
@@ -195,7 +182,7 @@ export default function ScratchPrizeSite() {
     const flipWait = setTimeout(() => {
       fireConfettiBurst();
       setShowingConfetti(true);
-    }, FLIP_MS + 50);
+    }, REVEAL_MS + 50);
 
     // After confetti, advance to next attempt (or stay on locked screen)
     const advance = setTimeout(() => {
@@ -211,7 +198,7 @@ export default function ScratchPrizeSite() {
         }));
         setResetToken((prev) => prev + 1);
       }
-    }, FLIP_MS + 50 + CONFETTI_MS);
+    }, REVEAL_MS + 50 + CONFETTI_MS);
 
     return () => {
       clearTimeout(flipWait);
