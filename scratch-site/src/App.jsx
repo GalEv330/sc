@@ -16,47 +16,33 @@ const PRIZES = [
 const MAX_ATTEMPTS = 3;
 const STORAGE_KEY = "romantic-scratch-board-v1";
 const CONFETTI_MS = 3000;
+const FLIP_MS = 600; // card flip animation duration
 
 // ── Repo usage logger ─────────────────────────────────────────────────────────
-// After every scratch, a line is appended to `usage-log.txt` in your repo.
-// You can read it directly on GitHub at any time.
-//
-// One-time setup:
-//   1. github.com → Settings → Developer settings
-//      → Personal access tokens → Fine-grained tokens → Generate new token
-//      • Resource owner: your account
-//      • Repository access: Only select repositories → pick this repo
-//      • Permissions: Repository permissions → Contents → Read and Write
-//      Copy the token (starts with github_pat_...) and paste below.
-//   2. Fill in your GitHub username and repo name below.
-const GITHUB_TOKEN = "YOUR_GITHUB_TOKEN";   // github_pat_...
+const GITHUB_TOKEN = "YOUR_GITHUB_TOKEN";
 const GITHUB_OWNER = "GalEv330";
 const GITHUB_REPO  = "sc";
 const LOG_FILE     = "usage-log.txt";
 // ─────────────────────────────────────────────────────────────────────────────
 
 function b64Encode(str) {
-  return btoa(unescape(encodeURIComponent(str)));
+  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))));
 }
 function b64Decode(b64) {
-  return decodeURIComponent(escape(atob(b64)));
+  return decodeURIComponent(atob(b64).split("").map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
 }
 
 async function logToRepo({ prize, attempt, isFinal, history, usedAt }) {
   if (GITHUB_TOKEN === "YOUR_GITHUB_TOKEN") {
-    console.log("📝 Logger not configured — would have written:", {
-      attempt, prize, isFinal, history, usedAt,
-    });
+    console.log("📝 Logger not configured:", { attempt, prize, isFinal, history, usedAt });
     return;
   }
-
   const timestamp = new Date(usedAt).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
-  const separator = "─".repeat(48);
   const entry =
-    `\n${separator}\n` +
+    `\n${"─".repeat(48)}\n` +
     `Attempt ${attempt} of ${MAX_ATTEMPTS}  •  ${timestamp}\n` +
     `Prize:   ${prize}\n` +
-    `Final:   ${isFinal ? "YES ✅ — this is the locked result" : "No"}\n` +
+    `Final:   ${isFinal ? "YES ✅ — locked result" : "No"}\n` +
     `History: ${history.join("  →  ")}\n`;
 
   const headers = {
@@ -65,21 +51,16 @@ async function logToRepo({ prize, attempt, isFinal, history, usedAt }) {
     "Content-Type": "application/json",
   };
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${LOG_FILE}`;
-
   try {
-    // Read current file (need its SHA to overwrite)
-    let current = "";
-    let sha;
+    let current = "", sha;
     const getRes = await fetch(url, { headers });
     if (getRes.ok) {
       const data = await getRes.json();
       current = b64Decode(data.content.replace(/\n/g, ""));
       sha = data.sha;
     } else if (getRes.status !== 404) {
-      throw new Error(`GET failed: ${getRes.status}`);
+      throw new Error(`GET ${getRes.status}`);
     }
-
-    // Write back with the new entry appended
     const putRes = await fetch(url, {
       method: "PUT",
       headers,
@@ -89,7 +70,7 @@ async function logToRepo({ prize, attempt, isFinal, history, usedAt }) {
         ...(sha && { sha }),
       }),
     });
-    if (!putRes.ok) throw new Error(`PUT failed: ${putRes.status}`);
+    if (!putRes.ok) throw new Error(`PUT ${putRes.status}`);
     console.log("✅ Logged to repo");
   } catch (err) {
     console.error("❌ Repo log failed:", err);
@@ -100,8 +81,8 @@ function fireConfettiBurst() {
   const colors = ["#f6d365", "#fda085", "#ff6b9d", "#c44dff", "#ffd700", "#6bcb77"];
   const end = Date.now() + CONFETTI_MS;
   const shoot = () => {
-    confetti({ particleCount: 8, angle: 60, spread: 65, origin: { x: 0, y: 0.75 }, colors });
-    confetti({ particleCount: 8, angle: 120, spread: 65, origin: { x: 1, y: 0.75 }, colors });
+    confetti({ particleCount: 9, angle: 60, spread: 70, origin: { x: 0, y: 0.7 }, colors });
+    confetti({ particleCount: 9, angle: 120, spread: 70, origin: { x: 1, y: 0.7 }, colors });
     if (Date.now() < end) requestAnimationFrame(shoot);
   };
   requestAnimationFrame(shoot);
@@ -141,149 +122,80 @@ function loadState() {
   }
 }
 
-// ── ScratchCard ───────────────────────────────────────────────────────────────
-function ScratchCard({ prize, disabled, onReveal, resetToken, isChosen }) {
-  const canvasRef = useRef(null);
-  const wrapperRef = useRef(null);
-  const isScratchingRef = useRef(false);
-  const alreadyRevealedRef = useRef(false);
+// ── FlipCard ──────────────────────────────────────────────────────────────────
+function FlipCard({ prize, disabled, onReveal, resetToken, isChosen }) {
+  const [flipped, setFlipped] = useState(false);
 
-  const drawOverlay = () => {
-    const canvas = canvasRef.current;
-    const wrapper = wrapperRef.current;
-    if (!canvas || !wrapper) return;
-
-    const rect = wrapper.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-
-    const ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
-
-    const gradient = ctx.createLinearGradient(0, 0, rect.width, rect.height);
-    gradient.addColorStop(0, "#f6d365");
-    gradient.addColorStop(1, "#fda085");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, rect.width, rect.height);
-
-    ctx.fillStyle = "rgba(255,255,255,0.2)";
-    for (let i = 0; i < 8; i++) {
-      ctx.beginPath();
-      ctx.arc(
-        Math.random() * rect.width,
-        Math.random() * rect.height,
-        18 + Math.random() * 30,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-    }
-
-    ctx.fillStyle = "rgba(255,255,255,0.88)";
-    ctx.font = `700 ${Math.max(12, rect.width * 0.13)}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("Scratch me", rect.width / 2, rect.height / 2 - rect.height * 0.1);
-    ctx.font = `500 ${Math.max(9, rect.width * 0.095)}px sans-serif`;
-    ctx.fillText("🪙 finger like a coin", rect.width / 2, rect.height / 2 + rect.height * 0.13);
-  };
-
+  // Reset when a new round starts
   useEffect(() => {
-    alreadyRevealedRef.current = false;
-    const timer = setTimeout(drawOverlay, 20);
-    window.addEventListener("resize", drawOverlay);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("resize", drawOverlay);
-    };
+    setFlipped(false);
   }, [resetToken]);
 
-  const scratchAt = (clientX, clientY) => {
-    if (disabled || alreadyRevealedRef.current) return;
-    const canvas = canvasRef.current;
-    const wrapper = wrapperRef.current;
-    if (!canvas || !wrapper) return;
-    const rect = wrapper.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    const ctx = canvas.getContext("2d");
-    ctx.save();
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.beginPath();
-    ctx.arc(x, y, 24, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  };
-
-  const maybeReveal = () => {
-    if (disabled || alreadyRevealedRef.current) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    const { width, height } = canvas;
-    const data = ctx.getImageData(0, 0, width, height).data;
-
-    let transparent = 0;
-    let total = 0;
-    const step = 12;
-    for (let y = 0; y < height; y += step) {
-      for (let x = 0; x < width; x += step) {
-        const alpha = data[(y * width + x) * 4 + 3];
-        if (alpha < 80) transparent++;
-        total++;
-      }
-    }
-
-    if (transparent / total > 0.38) {
-      alreadyRevealedRef.current = true;
-      onReveal();
-    }
+  const handleTap = () => {
+    if (disabled || flipped) return;
+    setFlipped(true);
+    onReveal();
   };
 
   return (
     <div
-      ref={wrapperRef}
-      className={`relative aspect-square overflow-hidden rounded-2xl border border-white/60 bg-white shadow-md transition-shadow ${
-        isChosen ? "ring-4 ring-pink-300 shadow-lg" : ""
-      } ${disabled && !isChosen ? "opacity-50" : ""}`}
+      onClick={handleTap}
+      style={{ perspective: "700px" }}
+      className={[
+        "aspect-square select-none",
+        disabled && !isChosen ? "opacity-30 pointer-events-none" : "cursor-pointer",
+        !disabled && !flipped ? "active:scale-95" : "",
+        "transition-transform duration-100",
+      ].join(" ")}
     >
-      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-rose-50 via-white to-amber-50 p-2 text-center">
-        <div>
-          <div className="mb-1 text-[9px] font-semibold uppercase tracking-widest text-rose-400">
-            Surprise
+      {/* 3-D container */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          transformStyle: "preserve-3d",
+          transition: flipped ? `transform ${FLIP_MS}ms cubic-bezier(0.4,0.15,0.2,1)` : "none",
+          transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)",
+        }}
+      >
+        {/* ── Front face (gold) ── */}
+        <div
+          style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}
+          className="absolute inset-0 rounded-2xl overflow-hidden flex items-center justify-center
+                     bg-gradient-to-br from-yellow-300 via-amber-400 to-orange-500 shadow-md"
+        >
+          <div className="card-shimmer" />
+          <div className="relative z-10 flex flex-col items-center gap-1.5 px-2 text-center">
+            <span className="text-3xl drop-shadow">🪙</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-white/90 drop-shadow-sm leading-tight">
+              Tap to reveal
+            </span>
           </div>
-          <div className="text-xs font-bold leading-4 text-slate-800">{prize}</div>
+        </div>
+
+        {/* ── Back face (prize) ── */}
+        <div
+          style={{
+            backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden",
+            transform: "rotateY(180deg)",
+          }}
+          className={[
+            "absolute inset-0 rounded-2xl overflow-hidden flex flex-col items-center justify-center p-2 text-center shadow-md border-2",
+            isChosen
+              ? "bg-gradient-to-br from-rose-50 via-white to-amber-50 border-rose-300"
+              : "bg-white border-slate-100",
+          ].join(" ")}
+        >
+          <span className="text-[8px] font-bold uppercase tracking-[0.18em] text-rose-400 mb-1.5">
+            Prize ✨
+          </span>
+          <span className="text-[10.5px] font-bold leading-[1.35] text-slate-800">
+            {prize}
+          </span>
         </div>
       </div>
-
-      {!alreadyRevealedRef.current && (
-        <canvas
-          ref={canvasRef}
-          className={`absolute inset-0 h-full w-full touch-none ${
-            disabled ? "pointer-events-none" : "cursor-pointer"
-          }`}
-          onPointerDown={(e) => {
-            if (disabled) return;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            isScratchingRef.current = true;
-            scratchAt(e.clientX, e.clientY);
-          }}
-          onPointerMove={(e) => {
-            if (!isScratchingRef.current || disabled) return;
-            scratchAt(e.clientX, e.clientY);
-          }}
-          onPointerUp={() => {
-            isScratchingRef.current = false;
-            maybeReveal();
-          }}
-          onPointerCancel={() => {
-            isScratchingRef.current = false;
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -294,23 +206,32 @@ export default function ScratchPrizeSite() {
   const [resetToken, setResetToken] = useState(0);
   const [showingConfetti, setShowingConfetti] = useState(false);
 
-  // Keep a ref so the setTimeout closure always reads the latest value
   const isLockedRef = useRef(state.locked);
   isLockedRef.current = state.locked;
 
-  // Persist to localStorage
+  // Don't fire confetti on initial page load (only on new reveals)
+  const isFirstMount = useRef(true);
+
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
 
-  // Fire confetti and auto-advance after CONFETTI_MS
   useEffect(() => {
+    // Skip the very first render so reloading the page doesn't replay confetti
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
     if (!state.roundComplete) return;
 
-    fireConfettiBurst();
-    setShowingConfetti(true);
+    // Wait for the flip animation to finish, then show confetti
+    const flipWait = setTimeout(() => {
+      fireConfettiBurst();
+      setShowingConfetti(true);
+    }, FLIP_MS + 50);
 
-    const timer = setTimeout(() => {
+    // After confetti, advance to next attempt (or stay on locked screen)
+    const advance = setTimeout(() => {
       setShowingConfetti(false);
       if (!isLockedRef.current) {
         setState((prev) => ({
@@ -323,76 +244,64 @@ export default function ScratchPrizeSite() {
         }));
         setResetToken((prev) => prev + 1);
       }
-    }, CONFETTI_MS);
+    }, FLIP_MS + 50 + CONFETTI_MS);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(flipWait);
+      clearTimeout(advance);
+    };
   }, [state.roundComplete]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleReveal = (index) => {
     if (state.roundComplete || state.locked) return;
-
     const prize = state.board[index];
     const nextHistory = [...state.history, prize];
     const isFinal = state.attempt >= MAX_ATTEMPTS;
-
-    setState({
-      ...state,
-      roundComplete: true,
-      revealedIndex: index,
-      revealedPrize: prize,
-      history: nextHistory,
-      locked: isFinal,
-    });
-
-    // Fire-and-forget — no await, so it doesn't block the UI
-    logToRepo({
-      prize,
-      attempt: state.attempt,
-      isFinal,
-      history: nextHistory,
-      usedAt: new Date().toISOString(),
-    });
+    setState({ ...state, roundComplete: true, revealedIndex: index, revealedPrize: prize, history: nextHistory, locked: isFinal });
+    logToRepo({ prize, attempt: state.attempt, isFinal, history: nextHistory, usedAt: new Date().toISOString() });
   };
 
   const startOverForTesting = () => {
     confetti.reset();
     setShowingConfetti(false);
+    isFirstMount.current = false;
     const fresh = createFreshBoard();
     setState(fresh);
     setResetToken((prev) => prev + 1);
   };
 
-  const logConfigured = GITHUB_TOKEN !== "YOUR_GITHUB_TOKEN";
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-rose-100 via-orange-50 to-white text-slate-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-10 pt-6">
+    <div className="min-h-screen bg-gradient-to-b from-rose-100 via-orange-50 to-white">
 
-        {/* Header */}
-        <div className="mb-4 rounded-[28px] border border-white/70 bg-white/75 p-5 shadow-xl backdrop-blur">
-          <div className="mb-2 flex items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-yellow-300 to-amber-500 text-2xl shadow-md">
-              🪙
-            </div>
-            <div>
-              <h1 className="text-xl font-extrabold tracking-tight">Scratch & Reveal</h1>
-              <p className="text-sm text-slate-600">
-                {state.locked
-                  ? "Prize is locked — enjoy! 💝"
-                  : `Attempt ${state.attempt} of ${MAX_ATTEMPTS}. Scratch one square.`}
-              </p>
-            </div>
+      {/* ── Header ── */}
+      <div className="max-w-md mx-auto px-4 pt-5 pb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 shrink-0 rounded-full bg-gradient-to-br from-yellow-300 to-amber-500 flex items-center justify-center text-xl shadow-md">
+            🪙
           </div>
-          <div className="mt-3 rounded-2xl bg-rose-50 px-4 py-3 text-sm text-slate-700">
-            Pick one square, scratch it with your finger, and reveal your surprise.
-            After three reveals, the final result is locked.
+          <div>
+            <h1 className="text-[17px] font-extrabold tracking-tight leading-tight text-slate-900">
+              Scratch & Reveal
+            </h1>
+            <p className="text-[11px] text-slate-500 leading-tight">
+              {state.locked
+                ? "Prize locked 💝"
+                : `Attempt ${state.attempt} of ${MAX_ATTEMPTS} — tap a card`}
+            </p>
           </div>
         </div>
+        <div className={`text-xs font-bold rounded-full px-3 py-1 shrink-0 ${
+          state.locked ? "bg-rose-100 text-rose-600" : "bg-amber-100 text-amber-700"
+        }`}>
+          {state.locked ? "Done ✅" : `${state.attempt} / ${MAX_ATTEMPTS}`}
+        </div>
+      </div>
 
-        {/* Scratch grid */}
-        <div className="grid grid-cols-3 gap-3">
+      {/* ── Card grid ── */}
+      <div className="max-w-md mx-auto px-3">
+        <div className="grid grid-cols-3 gap-2">
           {state.board.map((prize, index) => (
-            <ScratchCard
+            <FlipCard
               key={`${resetToken}-${index}`}
               prize={prize}
               resetToken={resetToken}
@@ -402,75 +311,73 @@ export default function ScratchPrizeSite() {
             />
           ))}
         </div>
+      </div>
 
-        {/* History */}
-        <div className="mt-5 rounded-[28px] border border-white/70 bg-white/80 p-5 shadow-lg backdrop-blur">
-          <div className="mb-2 text-sm font-semibold uppercase tracking-[0.24em] text-rose-400">
-            Reveal history
+      {/* ── Reveal history ── */}
+      {state.history.length > 0 && (
+        <div className="max-w-md mx-auto px-3 mt-4">
+          <div className="rounded-2xl bg-white/80 backdrop-blur-sm border border-white shadow-sm p-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-rose-400 mb-2">
+              Reveal history
+            </p>
+            {state.history.map((item, idx) => (
+              <div
+                key={idx}
+                className="flex items-start gap-2 py-1.5 border-b border-slate-50 last:border-0"
+              >
+                <span className="text-[11px] font-bold text-slate-300 shrink-0 mt-px">#{idx + 1}</span>
+                <span className="text-[12px] text-slate-700">{item}</span>
+              </div>
+            ))}
           </div>
-          <div className="space-y-2 text-sm text-slate-700">
-            {state.history.length === 0 ? (
-              <div className="text-slate-400">No prizes revealed yet.</div>
-            ) : (
-              state.history.map((item, idx) => (
-                <div key={`${item}-${idx}`} className="rounded-2xl bg-slate-50 px-3 py-2">
-                  <span className="font-semibold">Try {idx + 1}:</span> {item}
-                </div>
-              ))
-            )}
-          </div>
-
-          {!logConfigured && (
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Logging not connected yet — fill in GITHUB_TOKEN and GIST_ID at the top of App.jsx.
-            </div>
-          )}
         </div>
+      )}
 
-        {/* Testing reset */}
+      {/* ── Testing reset ── */}
+      <div className="max-w-md mx-auto px-3 mt-3 pb-8 text-center">
         <button
           onClick={startOverForTesting}
-          className="mt-4 rounded-2xl border border-slate-200 bg-white/60 px-4 py-3 text-sm font-semibold text-slate-400 backdrop-blur active:scale-[0.98]"
+          className="text-[11px] text-slate-300 py-2 bg-transparent border-none shadow-none active:text-slate-400"
         >
           Reset everything (testing only)
         </button>
       </div>
 
-      {/* ── Confetti overlay — auto-shown for 3 s after any scratch ── */}
+      {/* ── Confetti overlay — appears after flip, lasts 3 s ── */}
       {showingConfetti && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/80 px-6 text-center backdrop-blur-sm">
-          <div className="mb-4 text-6xl animate-bounce">
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/85 px-6 text-center backdrop-blur-sm">
+          <div className="text-7xl mb-5 animate-bounce">
             {state.locked ? "🎉" : "✨"}
           </div>
-          <div className="mb-3 text-sm font-semibold uppercase tracking-widest text-rose-300">
-            {state.locked ? "Final prize!" : `Attempt ${state.attempt} of ${MAX_ATTEMPTS}`}
-          </div>
-          <div className="max-w-xs text-3xl font-extrabold leading-snug text-white">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-rose-300 mb-3">
+            {state.locked ? "Your final prize!" : `Attempt ${state.attempt} of ${MAX_ATTEMPTS}`}
+          </p>
+          <p className="text-3xl font-extrabold text-white leading-snug max-w-[280px]">
             {state.revealedPrize}
-          </div>
-          <div className="mt-8 text-sm text-white/50">
-            {state.locked ? "Your prize has been saved 💝" : "Next attempt starting in a moment…"}
-          </div>
+          </p>
+          <p className="mt-8 text-[12px] text-white/40">
+            {state.locked ? "Saved forever 💝" : "Next attempt coming up…"}
+          </p>
         </div>
       )}
 
-      {/* ── Final locked screen — shown after confetti on the last attempt ── */}
+      {/* ── Final locked screen ── */}
       {state.locked && !showingConfetti && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/60 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-[32px] bg-white p-8 text-center shadow-2xl">
-            <div className="mb-4 text-5xl">🎁</div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.3em] text-rose-400">
+          <div className="w-full max-w-[340px] rounded-[32px] bg-white p-8 text-center shadow-2xl">
+            <div className="text-5xl mb-4">🎁</div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-rose-400 mb-2">
               Your final prize
-            </div>
-            <div className="mb-5 text-2xl font-extrabold leading-tight text-slate-900">
+            </p>
+            <p className="text-2xl font-extrabold leading-tight text-slate-900 mb-5">
               {state.revealedPrize}
-            </div>
-            <div className="mb-5 rounded-2xl bg-rose-50 px-4 py-3 text-sm text-slate-600">
-              This prize has been saved. Refreshing or closing won't change it.
-            </div>
+            </p>
+            <p className="rounded-2xl bg-rose-50 px-4 py-3 text-[13px] text-slate-600 mb-5">
+              This prize has been saved. Refreshing won't change it.
+            </p>
             <button
               onClick={startOverForTesting}
-              className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-500 active:scale-[0.98]"
+              className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-[13px] font-semibold text-slate-500 bg-white active:scale-[0.98] transition-transform"
             >
               Reset everything (testing only)
             </button>
