@@ -18,62 +18,29 @@ const STORAGE_KEY = "romantic-scratch-board-v1";
 const CONFETTI_MS = 3000;
 const FLIP_MS = 600; // card flip animation duration
 
-// ── Repo usage logger ─────────────────────────────────────────────────────────
-const GITHUB_TOKEN = "YOUR_GITHUB_TOKEN";
-const GITHUB_OWNER = "GalEv330";
-const GITHUB_REPO  = "sc";
-const LOG_FILE     = "usage-log.txt";
+// ── Email notification via Web3Forms (key is safe to be public) ───────────────
+const WEB3FORMS_KEY = "85d97cfe-dfec-4b5b-950b-78cdd4465b51";
 // ─────────────────────────────────────────────────────────────────────────────
 
-function b64Encode(str) {
-  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))));
-}
-function b64Decode(b64) {
-  return decodeURIComponent(atob(b64).split("").map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
-}
-
 async function logToRepo({ prize, attempt, isFinal, history, usedAt }) {
-  if (GITHUB_TOKEN === "YOUR_GITHUB_TOKEN") {
-    console.log("📝 Logger not configured:", { attempt, prize, isFinal, history, usedAt });
-    return;
-  }
   const timestamp = new Date(usedAt).toLocaleString("he-IL", { timeZone: "Asia/Jerusalem" });
-  const entry =
-    `\n${"─".repeat(48)}\n` +
-    `Attempt ${attempt} of ${MAX_ATTEMPTS}  •  ${timestamp}\n` +
-    `Prize:   ${prize}\n` +
-    `Final:   ${isFinal ? "YES ✅ — locked result" : "No"}\n` +
-    `History: ${history.join("  →  ")}\n`;
-
-  const headers = {
-    Authorization: `Bearer ${GITHUB_TOKEN}`,
-    Accept: "application/vnd.github+json",
-    "Content-Type": "application/json",
-  };
-  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${LOG_FILE}`;
   try {
-    let current = "", sha;
-    const getRes = await fetch(url, { headers });
-    if (getRes.ok) {
-      const data = await getRes.json();
-      current = b64Decode(data.content.replace(/\n/g, ""));
-      sha = data.sha;
-    } else if (getRes.status !== 404) {
-      throw new Error(`GET ${getRes.status}`);
-    }
-    const putRes = await fetch(url, {
-      method: "PUT",
-      headers,
+    await fetch("https://api.web3forms.com/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        message: `log: attempt ${attempt}${isFinal ? " (final)" : ""}`,
-        content: b64Encode(current + entry),
-        ...(sha && { sha }),
+        access_key: WEB3FORMS_KEY,
+        subject: `Scratch Card — Attempt ${attempt}/${MAX_ATTEMPTS}${isFinal ? " 🎉 FINAL" : ""}`,
+        attempt: `${attempt} of ${MAX_ATTEMPTS}`,
+        prize,
+        final: isFinal ? "YES ✅ — this is the locked result" : "No",
+        history: history.join(" → "),
+        time: timestamp,
       }),
     });
-    if (!putRes.ok) throw new Error(`PUT ${putRes.status}`);
-    console.log("✅ Logged to repo");
+    console.log("✅ Email sent");
   } catch (err) {
-    console.error("❌ Repo log failed:", err);
+    console.error("❌ Email failed:", err);
   }
 }
 
