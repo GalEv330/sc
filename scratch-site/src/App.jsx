@@ -293,7 +293,7 @@ export default function ScratchPrizeSite() {
           onClick={startOverForTesting}
           className="text-[11px] text-slate-300 py-2 bg-transparent border-none shadow-none active:text-slate-400"
         >
-          Reset everything (testing only)
+          Reset everything - testing only (And no, I can't be fooled - I got the results...)
         </button>
       </div>
 
@@ -333,7 +333,7 @@ export default function ScratchPrizeSite() {
               onClick={startOverForTesting}
               className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-[13px] font-semibold text-slate-500 bg-white active:scale-[0.98] transition-transform"
             >
-              Reset everything (testing only)
+              Reset everything - testing only (And no, I can't be fooled - I got the results...)
             </button>
           </div>
         </div>
