@@ -17,26 +17,24 @@ const MAX_ATTEMPTS = 3;
 const STORAGE_KEY = "romantic-scratch-board-v1";
 const CONFETTI_MS = 3000;
 
-// ── GitHub Gist logger ────────────────────────────────────────────────────────
-// After every scratch, a line is appended to a private Gist file you own.
-// You can always open the Gist URL and see the full history.
+// ── Repo usage logger ─────────────────────────────────────────────────────────
+// After every scratch, a line is appended to `usage-log.txt` in your repo.
+// You can read it directly on GitHub at any time.
 //
-// One-time setup (2 minutes):
-//   1. github.com → Settings → Developer settings → Personal access tokens
-//      → Fine-grained tokens → Generate new token
-//      • Repository access: "Only public repositories" (or none)
-//      • Permissions: Gists → Read and Write
-//      Copy the token below.
-//   2. gist.github.com → "+ New gist"
-//      • Filename: scratch-log.txt   Content: (leave blank or type a header)
-//      • Choose "Create secret gist"
-//      Copy the Gist ID from the URL (the long hash at the end).
-const GITHUB_TOKEN  = "YOUR_GITHUB_TOKEN";   // ghp_...
-const GIST_ID       = "YOUR_GIST_ID";        // 32-char hash from the Gist URL
-const GIST_FILENAME = "scratch-log.txt";
+// One-time setup:
+//   1. github.com → Settings → Developer settings
+//      → Personal access tokens → Fine-grained tokens → Generate new token
+//      • Resource owner: your account
+//      • Repository access: Only select repositories → pick this repo
+//      • Permissions: Repository permissions → Contents → Read and Write
+//      Copy the token (starts with github_pat_...) and paste below.
+//   2. Fill in your GitHub username and repo name below.
+const GITHUB_TOKEN = "YOUR_GITHUB_TOKEN";   // github_pat_...
+const GITHUB_OWNER = "YOUR_USERNAME";        // e.g. "galevar"
+const GITHUB_REPO  = "YOUR_REPO_NAME";       // e.g. "scratch-site"
+const LOG_FILE     = "usage-log.txt";
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Safely base64-encode a string that may contain emojis / non-ASCII
 function b64Encode(str) {
   return btoa(unescape(encodeURIComponent(str)));
 }
@@ -44,9 +42,9 @@ function b64Decode(b64) {
   return decodeURIComponent(escape(atob(b64)));
 }
 
-async function logToGist({ prize, attempt, isFinal, history, usedAt }) {
+async function logToRepo({ prize, attempt, isFinal, history, usedAt }) {
   if (GITHUB_TOKEN === "YOUR_GITHUB_TOKEN") {
-    console.log("📝 Gist not configured — logging to console instead:", {
+    console.log("📝 Logger not configured — would have written:", {
       attempt, prize, isFinal, history, usedAt,
     });
     return;
@@ -66,27 +64,35 @@ async function logToGist({ prize, attempt, isFinal, history, usedAt }) {
     Accept: "application/vnd.github+json",
     "Content-Type": "application/json",
   };
-  const url = `https://api.github.com/gists/${GIST_ID}`;
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${LOG_FILE}`;
 
   try {
-    // Read current content
+    // Read current file (need its SHA to overwrite)
+    let current = "";
+    let sha;
     const getRes = await fetch(url, { headers });
-    if (!getRes.ok) throw new Error(`GET failed: ${getRes.status}`);
-    const gist = await getRes.json();
-    const current = gist.files[GIST_FILENAME]?.content ?? "";
+    if (getRes.ok) {
+      const data = await getRes.json();
+      current = b64Decode(data.content.replace(/\n/g, ""));
+      sha = data.sha;
+    } else if (getRes.status !== 404) {
+      throw new Error(`GET failed: ${getRes.status}`);
+    }
 
-    // Append and write back
-    const patchRes = await fetch(url, {
-      method: "PATCH",
+    // Write back with the new entry appended
+    const putRes = await fetch(url, {
+      method: "PUT",
       headers,
       body: JSON.stringify({
-        files: { [GIST_FILENAME]: { content: current + entry } },
+        message: `log: attempt ${attempt}${isFinal ? " (final)" : ""}`,
+        content: b64Encode(current + entry),
+        ...(sha && { sha }),
       }),
     });
-    if (!patchRes.ok) throw new Error(`PATCH failed: ${patchRes.status}`);
-    console.log("✅ Logged to Gist");
+    if (!putRes.ok) throw new Error(`PUT failed: ${putRes.status}`);
+    console.log("✅ Logged to repo");
   } catch (err) {
-    console.error("❌ Gist log failed:", err);
+    console.error("❌ Repo log failed:", err);
   }
 }
 
@@ -339,7 +345,7 @@ export default function ScratchPrizeSite() {
     });
 
     // Fire-and-forget — no await, so it doesn't block the UI
-    logToGist({
+    logToRepo({
       prize,
       attempt: state.attempt,
       isFinal,
