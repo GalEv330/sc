@@ -30,8 +30,8 @@ const CONFETTI_MS = 3000;
 //      Copy the token (starts with github_pat_...) and paste below.
 //   2. Fill in your GitHub username and repo name below.
 const GITHUB_TOKEN = "YOUR_GITHUB_TOKEN";   // github_pat_...
-const GITHUB_OWNER = "YOUR_USERNAME";        // e.g. "galevar"
-const GITHUB_REPO  = "YOUR_REPO_NAME";       // e.g. "scratch-site"
+const GITHUB_OWNER = "GalEv330";
+const GITHUB_REPO  = "sc";
 const LOG_FILE     = "usage-log.txt";
 // ─────────────────────────────────────────────────────────────────────────────
 
